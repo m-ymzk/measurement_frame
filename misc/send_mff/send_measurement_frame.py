@@ -54,7 +54,7 @@ def main() -> None:
     with socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETHERTYPE_MFF)) as sock:
         sock.bind((args.interface, 0))
         for shot in range(args.num_shot):
-            step_id = (time_ns() // 100) & 0xFFFFFFFFFFFFFFFF
+            step_id = (time_ns() // 1) & 0xFFFFFFFFFFFFFFFF
             offset = (shot * len_payload) % len(payload_data)
 
             frame = bytearray(header)
@@ -73,13 +73,22 @@ def main() -> None:
             if len(frame) < 60:
                 frame.extend(b"\x00" * (60 - len(frame)))
 
+            step_id_after = (time_ns() // 1) & 0xFFFFFFFFFFFFFFFF
+            latency = step_id_after - step_id
+            #print(f"# sended {step_id_after} {latency}us")
+            #if latency < 1000: wait 1000-latency ns
+            if latency < 1000:
+                wait_ns = 1000 - latency
+                wait_s = wait_ns / 1_000_000_000
+                print(f"# wait {wait_ns}ns {wait_s}s")
+                import time
+                time.sleep(wait_s)
+                step_id_after = (time_ns() // 1) & 0xFFFFFFFFFFFFFFFF
+                latency = step_id_after - step_id
+            histry_latency.append(latency)
+
             #sock.sendto(frame, (args.interface, 0))
             sock.send(frame)
-
-            step_id_after = (time_ns() // 100) & 0xFFFFFFFFFFFFFFFF
-            latency = step_id_after - step_id
-            histry_latency.append(latency)
-            #print(f"# sended {step_id_after} {latency}us")
 
             if args.verbose:
                 # 8 バイトずつに改行を入れてframeをダンプ
@@ -88,9 +97,9 @@ def main() -> None:
 
     history = histry_latency[2:]  # Skip the first two shots for more stable statistics
     if history:
-        print(f"Average latency: {statistics.fmean(history)}us, sigma {statistics.pstdev(history)}us")
-        print(f"Max latency: {max(history)}us")
-        print(f"Min latency: {min(history)}us")
+        print(f"Average latency: {statistics.fmean(history):.1f} +- {statistics.pstdev(history):.1f}ns")
+        print(f"Max latency: {max(history)}ns")
+        print(f"Min latency: {min(history)}ns")
 
 if __name__ == "__main__":
     main()

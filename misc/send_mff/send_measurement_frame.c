@@ -130,11 +130,11 @@ static int read_file_all(const char *path, uint8_t **buf, size_t *len)
     return 0;
 }
 
-static uint64_t now_ns_100(void)
+static uint64_t now_ns(void)
 {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
-    return ((uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec) / 100ULL;
+    return ((uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec) * 1ULL;
 }
 
 static uint64_t host_to_be64(uint64_t x)
@@ -268,16 +268,15 @@ int main(int argc, char **argv)
 
     for (int shot = 0; shot < num_shot; ++shot)
     {
-        uint64_t start_ns100 = now_ns_100();
+        uint64_t start_ns = now_ns();
         size_t offset = (size_t)((shot * total_payload_size) % file_len);
         size_t frame_len = header_len;
 
-        memset(frame, 0, sizeof(frame));
         memcpy(frame, dst_mac, 6);
         memcpy(frame + 6, src_mac, 6);
         *(uint16_t *)(frame + 12) = htons((uint16_t)ETHERTYPE_MFF);
         *(uint16_t *)(frame + 14) = htons((uint16_t)VERSION_MFF);
-        *(uint64_t *)(frame + 16) = host_to_be64(start_ns100);
+        *(uint64_t *)(frame + 16) = host_to_be64(start_ns);
         *(uint32_t *)(frame + 24) = htonl((uint32_t)DEVICE_ID_DEFAULT);
         *(uint32_t *)(frame + 28) = htonl((uint32_t)num_qubits);
         *(uint32_t *)(frame + 32) = htonl((uint32_t)info_num);
@@ -306,6 +305,22 @@ int main(int argc, char **argv)
         if (frame_len < 60)
         {
             frame_len = 60;
+            memset(frame + header_len + total_payload_size, 0,
+                   frame_len - header_len - total_payload_size);
+        }
+
+        {
+            uint64_t end_ns = now_ns();
+            uint64_t latency = end_ns - start_ns;
+            // if latency < 1000 then wait 1000-latency ns
+            if (latency < 1000)
+            {
+                uint64_t wait_ns = 1000 - latency;
+                struct timespec ts;
+                ts.tv_sec = wait_ns / 1000000000ULL;
+                ts.tv_nsec = wait_ns % 1000000000ULL;
+                nanosleep(&ts, NULL);
+            }
         }
 
         ssize_t sent = sendto(sock, frame, frame_len, 0, (struct sockaddr *)&sll, sizeof(sll));
@@ -319,8 +334,8 @@ int main(int argc, char **argv)
 
         if (verbose)
         {
-            uint64_t end_ns100 = now_ns_100();
-            uint64_t latency = end_ns100 - start_ns100;
+            uint64_t end_ns = now_ns();
+            uint64_t latency = end_ns - start_ns;
             if (latency_count < sizeof(latencies) / sizeof(latencies[0]))
             {
                 latencies[latency_count++] = latency;
@@ -351,9 +366,9 @@ int main(int argc, char **argv)
         }
         var /= (double)latency_count;
         double sigma = sqrt(var);
-        printf("Average latency: %.3f us, sigma %.3f us\n", avg / 10.0, sigma / 10.0);
-        printf("Max latency: %.3f us\n", (double)maxv / 10.0);
-        printf("Min latency: %.3f us\n", (double)minv / 10.0);
+        printf("Average latency: %.1f +- %.1f ns\n", avg, sigma);
+        printf("Max latency: %.1f ns\n", (double)maxv);
+        printf("Min latency: %.1f ns\n", (double)minv);
     }
 
     close(sock);
