@@ -4,3 +4,6 @@ a.out
 ethernet_sender
 ethernet_receiver
 measurement_frame_sender
+**build
+**venv
+**__pycache__
