@@ -51,6 +51,7 @@ def main() -> None:
 
     histry_latency = []
 
+    last_send_time = time_ns() & 0xFFFFFFFFFFFFFFFF
     with socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETHERTYPE_MFF)) as sock:
         sock.bind((args.interface, 0))
         for shot in range(args.num_shot):
@@ -73,8 +74,8 @@ def main() -> None:
             if len(frame) < 60:
                 frame.extend(b"\x00" * (60 - len(frame)))
 
-            step_id_after = (time_ns() // 1) & 0xFFFFFFFFFFFFFFFF
-            latency = step_id_after - step_id
+            step_id_after = time_ns() & 0xFFFFFFFFFFFFFFFF
+            latency = step_id_after - last_send_time
             #print(f"# sended {step_id_after} {latency}us")
             #if latency < 1000: wait 1000-latency ns
             if latency < 1000:
@@ -85,10 +86,14 @@ def main() -> None:
                 time.sleep(wait_s)
                 step_id_after = (time_ns() // 1) & 0xFFFFFFFFFFFFFFFF
                 latency = step_id_after - step_id
-            histry_latency.append(latency)
+            last_send_time = time_ns() & 0xFFFFFFFFFFFFFFFF
 
             #sock.sendto(frame, (args.interface, 0))
             sock.send(frame)
+
+            step_id_after = (time_ns() // 1) & 0xFFFFFFFFFFFFFFFF
+            latency = step_id_after - step_id
+            histry_latency.append(latency)
 
             if args.verbose:
                 # 8 バイトずつに改行を入れてframeをダンプ

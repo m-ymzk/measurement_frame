@@ -236,7 +236,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    int sock = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
+    int sock = socket(AF_PACKET, SOCK_RAW, htons(ETHERTYPE_MFF));
     if (sock < 0)
     {
         perror("socket");
@@ -247,10 +247,22 @@ int main(int argc, char **argv)
     struct sockaddr_ll sll;
     memset(&sll, 0, sizeof(sll));
     sll.sll_family = AF_PACKET;
-    sll.sll_protocol = htons(ETH_P_ALL);
+    sll.sll_protocol = 0;
     sll.sll_ifindex = if_nametoindex(ifname);
-    sll.sll_halen = ETH_ALEN;
-    memcpy(sll.sll_addr, dst_mac, ETH_ALEN);
+    if (sll.sll_ifindex == 0)
+    {
+        fprintf(stderr, "interface not found: %s\n", ifname);
+        close(sock);
+        free(file_data);
+        return 1;
+    }
+    if (bind(sock, (struct sockaddr *)&sll, sizeof(sll)) < 0)
+    {
+        perror("bind");
+        close(sock);
+        free(file_data);
+        return 1;
+    }
 
     uint8_t frame[1518];
     size_t header_len = 6 + 6 + 2 + 2 + 8 + 4 + 4 + 4;
@@ -265,6 +277,8 @@ int main(int argc, char **argv)
 
     uint64_t latencies[1024];
     size_t latency_count = 0;
+
+    uint64_t last_send_time = now_ns();
 
     for (int shot = 0; shot < num_shot; ++shot)
     {
@@ -310,20 +324,18 @@ int main(int argc, char **argv)
         }
 
         {
-            uint64_t end_ns = now_ns();
-            uint64_t latency = end_ns - start_ns;
-            // if latency < 1000 then wait 1000-latency ns
-            if (latency < 1000)
+            uint64_t elapsed_ns = now_ns() - last_send_time;
+            if (elapsed_ns < 1000)
             {
-                uint64_t wait_ns = 1000 - latency;
-                struct timespec ts;
-                ts.tv_sec = wait_ns / 1000000000ULL;
-                ts.tv_nsec = wait_ns % 1000000000ULL;
-                nanosleep(&ts, NULL);
+                printf("# shot %d: elapsed time %llu ns, waiting for 1000 ns\n", shot, (unsigned long long)elapsed_ns);
+            }
+            while (now_ns() - last_send_time < 1000)
+            {
             }
         }
+        last_send_time = now_ns();
 
-        ssize_t sent = sendto(sock, frame, frame_len, 0, (struct sockaddr *)&sll, sizeof(sll));
+        ssize_t sent = send(sock, frame, frame_len, 0);
         if (sent < 0)
         {
             perror("sendto");
@@ -336,19 +348,21 @@ int main(int argc, char **argv)
         {
             uint64_t end_ns = now_ns();
             uint64_t latency = end_ns - start_ns;
+            uint64_t send_time = end_ns - last_send_time;
             if (latency_count < sizeof(latencies) / sizeof(latencies[0]))
             {
                 latencies[latency_count++] = latency;
             }
+            printf("# shot %d: latency %llu ns, send time %llu ns\n", shot, (unsigned long long)latency, (unsigned long long)send_time);
         }
     }
 
-    if (verbose && latency_count > 0)
+    if (verbose && latency_count > 2)
     {
         uint64_t sum = 0;
         uint64_t maxv = 0;
         uint64_t minv = ~0ULL;
-        for (size_t i = 0; i < latency_count; ++i)
+        for (size_t i = 2; i < latency_count; ++i)
         {
             uint64_t v = latencies[i];
             sum += v;
@@ -357,14 +371,14 @@ int main(int argc, char **argv)
             if (v < minv)
                 minv = v;
         }
-        double avg = (double)sum / (double)latency_count;
+        double avg = (double)sum / (double)(latency_count - 2);
         double var = 0.0;
-        for (size_t i = 0; i < latency_count; ++i)
+        for (size_t i = 2; i < latency_count; ++i)
         {
             double d = (double)latencies[i] - avg;
             var += d * d;
         }
-        var /= (double)latency_count;
+        var /= (double)(latency_count - 2);
         double sigma = sqrt(var);
         printf("Average latency: %.1f +- %.1f ns\n", avg, sigma);
         printf("Max latency: %.1f ns\n", (double)maxv);
